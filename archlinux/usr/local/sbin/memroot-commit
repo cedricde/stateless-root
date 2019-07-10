@@ -1,0 +1,117 @@
+#!/bin/bash
+
+. /etc/memroot.conf
+
+
+num_to_ramdev() {
+    if [[ "${1#1:}" != "$1" ]]
+    then
+        echo "/dev/ram${1#1:}"
+    fi
+}
+
+wait_for_merge() {
+    local dev=$1
+
+    until set -- $(dmsetup status "$dev") && [[ ${4%/*} -eq ${5} ]]
+    do
+            sleep .5
+    done
+}
+
+wait_for_clean() {
+    local dev=$1
+
+    until set -- $(dmsetup status "$dev") && [[ ${14} -eq 0 ]]
+    do
+        sleep .5
+    done
+}
+
+is_snapshot_full() {
+    set -- $(dmsetup status "$1") && [[ ${4%/*} -eq ${4#*/} ]]
+}
+
+
+# disable udev when launched at shutdown
+if [[ "$(readlink -f /proc/$PPID/exe)" == '/usr/lib/systemd/systemd-shutdown' ]]
+then
+    dmsetup='dmsetup --noudevsync'
+    exec 1>/dev/console 2>&1
+else
+    dmsetup='dmsetup'
+fi
+
+if [[ ! -b /dev/mapper/cached_disk ]] || [[ ! -b /dev/mapper/volatile_root ]]
+then
+    echo "Root in memory system seems not used"
+    exit 0
+fi
+
+if is_snapshot_full volatile_root
+then
+    echo "error: snapshot is full, discarding it"
+    exit 1
+fi
+
+# find the rollback device
+rollback_dev=/dev/mapper/rollback_dev
+if [[ ! -b $rollback_dev ]] && ! rollback_dev=$(findfs "$ROLLBACK_DEV" 2>/dev/null)
+then
+    echo "error: cannot find rollback device"
+    exit 1
+fi
+
+# get current tables
+if ! CACHE_TABLE=$(dmsetup table cached_disk)
+then
+    echo "error: unable to get cached disk table"
+    exit 1
+fi
+if ! VOLATILE_TABLE=$(dmsetup table volatile_root)
+then
+    echo "error: unable to get volatile root table"
+    exit 1
+fi
+
+METADATA_DEV=$(num_to_ramdev $(set -- $CACHE_TABLE && echo $4))
+CACHE_DEV=$(num_to_ramdev $(set -- $CACHE_TABLE && echo $5))
+SNAPSHOT_DEV=$(num_to_ramdev $(set -- $VOLATILE_TABLE && echo $5))
+ORIGIN_NUMDEV=$(set -- $CACHE_TABLE && echo $6)
+
+ORIGIN_SSIZE=$(blockdev --getsz /dev/mapper/volatile_root)
+CHUNK_SSIZE=$((CHUNK_SIZE * 2))
+
+
+echo "Disabling the cache on the disk..."
+$dmsetup reload cached_disk --table "${CACHE_TABLE/% mq */ cleaner 0}"
+$dmsetup resume cached_disk
+wait_for_clean cached_disk
+$dmsetup reload cached_disk --table "${CACHE_TABLE% cache *} linear $ORIGIN_NUMDEV 0"
+$dmsetup resume cached_disk
+dmsetup ls | while read dev ignore
+do
+    [ "${dev#cached_disk}" != "$dev" ] && $dmsetup rename $dev ${dev#cached_}
+done
+
+echo "Creating rollback snapshot..."
+dd if=/dev/zero of=$rollback_dev bs=${CHUNK_SIZE}K count=1 status=none
+$dmsetup create rollback_root --table "0 $ORIGIN_SSIZE snapshot /dev/mapper/cached_root $rollback_dev P $CHUNK_SSIZE"
+
+echo "Merging volatile snapshot back to origin device..."
+$dmsetup reload volatile_root --table "${VOLATILE_TABLE/snapshot/snapshot-merge}"
+$dmsetup resume volatile_root
+wait_for_merge volatile_root
+
+echo "Reconfiguring root device..."
+dmsetup table cached_root | $dmsetup reload volatile_root
+$dmsetup resume volatile_root
+$dmsetup rename volatile_root root
+
+echo "Clearing rollback snapshot..."
+$dmsetup remove rollback_root
+dd if=/dev/zero of=$rollback_dev bs=${CHUNK_SIZE}K count=1 status=none
+$dmsetup remove cached_root
+
+# free cache memory
+blockdev --flushbufs $METADATA_DEV $CACHE_DEV $SNAPSHOT_DEV

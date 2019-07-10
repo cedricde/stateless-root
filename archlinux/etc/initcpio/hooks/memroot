@@ -1,0 +1,141 @@
+#!/usr/bin/ash
+
+. /etc/memroot.conf
+
+
+wait_for_merge() {
+    local dev=$1
+    until set -- $(dmsetup status "$dev") && [ ${4%/*} -eq ${5} ]
+    do
+        sleep .5
+    done
+}
+
+clean_on_error() {
+    kpartx -s -d /dev/mapper/cached_disk 1>/dev/null 2>&1
+    dmsetup remove rollback_root 1>/dev/null 2>&1
+    dmsetup remove rollback_dev 1>/dev/null 2>&1
+    dmsetup remove cached_root 1>/dev/null 2>&1
+    dmsetup remove cached_disk 1>/dev/null 2>&1
+    dmsetup remove root 1>/dev/null 2>&1
+}
+
+
+run_hook() {
+    local real_root root_size
+    local cache_dev metadata_dev snapshot_dev rollback_dev
+
+    # find the original root device
+    if ! real_root=$(resolve_device "$root")
+    then
+        err "Cannot find root device"
+        return 1
+    fi
+    cached_dev=${real_root%%[0-9]*}
+
+    # find the rollback device
+    if ! rollback_dev=$(resolve_device "$ROLLBACK_DEV")
+    then
+        err "Cannot find rollback device"
+        return 1
+    fi
+
+    # Size of the disk to cache in sectors
+    disk_size=$(blockdev --getsz "$cached_dev")
+
+    # Size of the root device in sectors
+    root_size=$(blockdev --getsz "$real_root")
+
+    # Size of the metadata device in KiB
+    metadata_size=$((((((4<<20)+16*(RAM_SIZE/CHUNK_SIZE))+4095)/4096)*4))
+
+    # Size of the chunks in sectors
+    chunk_ssize=$((CHUNK_SIZE*2))
+
+
+    msg "Loading ramdisk module..."
+    modprobe -q rd rd_nr=3 rd_size=$RAM_SIZE
+
+    cache_dev=/dev/ram0
+    metadata_dev=/dev/ram1
+    snapshot_dev=/dev/ram2
+
+    # check ram devices
+    if [ ! -b $cache_dev ] || [ ! -b $metadata_dev ] || [ ! -b $snapshot_dev ]
+    then
+        err "Unable to find required memory devices"
+        return 1
+    fi
+
+    msg "Clearing cache metadata and snapshot..."
+    dd if=/dev/zero of=$metadata_dev bs=4K count=$((metadata_size/4)) status=none 1>/dev/null 2>&1
+    dd if=/dev/zero of=$snapshot_dev bs=${CHUNK_SIZE}K count=1 status=none 1>/dev/null 2>&1
+
+
+    # if rollback snapshot is present
+    if [ $(od -t x4 -N 4 -A n "$rollback_dev") = '70416e53' ] && \
+       dmsetup create rollback_root --table "0 $root_size snapshot-merge $real_root $rollback_dev P $chunk_ssize"
+    then
+        msg "Restoring last state..."
+        wait_for_merge rollback_root
+        dmsetup remove rollback_root
+        dd if=/dev/zero of=$rollback_dev bs=${CHUNK_SIZE}K count=1 status=none
+    fi
+
+    msg "Creating cache over the disk device..."
+    if ! dmsetup create cached_disk --table "0 $disk_size cache $metadata_dev $cache_dev $cached_dev $chunk_ssize 1 writethrough mq 6 sequential_threshold 0 random_threshold 0 read_promote_adjustment 0"
+    then
+        err "Unable to create the cache"
+        clean_on_error
+        return 1
+    fi
+
+    msg "Parsing partition table..."
+    if ! kpartx -s -a /dev/mapper/cached_disk
+    then
+        err "Unable to parse partition table"
+        clean_on_error
+        return 1
+    fi
+
+    msg "Identifying the cached root..."
+    if ! dmsetup table cached_disk${real_root##*[^0-9]} | dmsetup create cached_root
+    then
+        err "Unable to identify the cached root"
+        clean_on_error
+        return 1
+    fi
+
+    if [ "$cached_dev" = "${rollback_dev%%[0-9]*}" ]
+    then
+        msg "Identifying the rollback device..."
+        if ! dmsetup table cached_disk${rollback_dev##*[^0-9]} | dmsetup create rollback_dev
+        then
+            err "Unable to identify the rollback device"
+            clean_on_error
+            return 1
+        fi
+    fi
+
+    msg "Creating volatile snapshot over the root device..."
+    if ! dmsetup create volatile_root --table "0 $root_size snapshot /dev/mapper/cached_root $snapshot_dev P $chunk_ssize"
+    then
+        err "Unable to create the volatile snapshot"
+        clean_on_error
+        return 1
+    fi
+
+    msg "Disabling partitions of the original device..."
+    if ! partx -d $cached_dev
+    then
+        err "Unable to disable partitions of the original device"
+        clean_on_error
+        return 1
+    fi
+
+    export root=/dev/mapper/volatile_root
+
+    return 0
+}
+
+# vim: set ft=sh ts=4 sw=4 et:
