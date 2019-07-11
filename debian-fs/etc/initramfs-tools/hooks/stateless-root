@@ -1,0 +1,56 @@
+#!/bin/sh
+
+set -e
+
+PREREQ=""
+
+case "$1" in
+	prereqs)
+		echo "$PREREQ"
+		exit 0
+		;;
+esac
+
+. /usr/share/initramfs-tools/hook-functions
+
+# load stateless system configuration
+. "${CONFDIR}"/conf.d/stateless-root
+
+if [ -z "$STATELESS_FSTYPE" ] ; then
+	exit 0
+fi
+
+manual_add_modules overlay
+
+case "$STATELESS_FSTYPE" in
+	tmpfs)
+		;;
+	btrfs)
+		manual_add_modules btrfs
+		if ! copy_exec /bin/mkfs.btrfs /sbin/ ; then
+			echo >&2 "E: Package 'btrfs-progs' is missing, cannot continue."
+			exit 1
+		fi
+		;;
+	ext4)
+		manual_add_modules ext4
+		if ! copy_exec /sbin/mke2fs /sbin/mkfs.ext4 ||
+		   ! copy_file conf /etc/mke2fs.conf ; then
+			echo >&2 "E: Package 'e2fsprogs' is missing, cannot continue."
+			exit 1
+		fi
+		;;
+	xfs)
+		manual_add_modules xfs
+		if ! copy_exec /sbin/mkfs.xfs /sbin/ ; then
+			echo >&2 "E: Package 'xfsprogs' is missing, cannot continue."
+			exit 1
+		fi
+		;;
+	*)
+		echo >&2 "E: Invalid filesystem type: '$STATELESS_FSTYPE'"
+		exit 1
+		;;
+esac
+
+exit 0

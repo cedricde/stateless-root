@@ -1,0 +1,120 @@
+#!/bin/sh
+
+set -e
+
+PREREQ=""
+
+case "$1" in
+	prereqs)
+		echo "$PREREQ"
+		exit 0
+		;;
+esac
+
+. /scripts/functions
+
+# initialize configuration
+STATELESS_FSTYPE=
+STATELESS_FLAGS=
+STATELESS_DEVICE=
+stateless_mntdir=/.stateless
+
+# load default configuration
+. /conf/conf.d/stateless-root
+
+for x in $(cat /proc/cmdline) ; do
+	case "$x" in
+		stateless.fstype=*)
+			STATELESS_FSTYPE=${x#stateless.fstype=}
+			;;
+		stateless.flags=*)
+			STATELESS_FLAGS=${x#stateless.flags=}
+			;;
+		stateless.device=*)
+			STATELESS_DEVICE=${x#stateless.device=}
+			;;
+	esac
+done
+
+# sanity check
+case "$STATELESS_FSTYPE" in
+	''|no|none|false|disable)
+		exit 0
+		;;
+esac
+
+
+log_begin_msg "Preparing volatile filesystem"
+
+if [ "$STATELESS_FSTYPE" = 'tmpfs' ] ; then
+	volatile_dev=tmpfs
+else
+	# resolve volatile device
+	volatile_dev=$(resolve_device "$STATELESS_DEVICE")
+	if [ -z "$volatile_dev" ] ; then
+		panic "Bad volatile device specified"
+	fi
+
+	# sanity check to prevent erroneous erase
+	LABEL=
+	TYPE=
+	eval "$(blkid -o export -s LABEL -s TYPE "$volatile_dev")"
+	if [ -n "$TYPE" -a "$LABEL" != "$STATELESS_FSLABEL" ] ; then
+		panic "Volatile device is not empty, use wipefs to clear it"
+	fi
+
+	# create volatile filesystem
+	case "$STATELESS_FSTYPE" in
+		btrfs)
+			if ! /sbin/mkfs.btrfs -q -f -L "$STATELESS_FSLABEL" "$volatile_dev" ; then
+				panic "Failed to create btrfs filesystem on $volatile_dev"
+			fi
+			;;
+		ext4)
+			if ! /sbin/mkfs.ext4 -q -F -L "$STATELESS_FSLABEL" -O '^has_journal' "$volatile_dev" >/dev/null ; then
+				panic "Failed to create ext4 filesystem on $volatile_dev"
+			fi
+			;;
+		xfs)
+			if ! /sbin/mkfs.xfs -q -f -L "$STATELESS_FSLABEL" "$volatile_dev" ; then
+				panic "Failed to create xfs filesystem on $volatile_dev"
+			fi
+			;;
+	esac
+fi
+
+mkdir -p "$stateless_mntdir"
+
+# mount volatile filesystem
+if ! mount -w -t "$STATELESS_FSTYPE" ${STATELESS_FLAGS:+-o "$STATELESS_FLAGS"} "$volatile_dev" "$stateless_mntdir" ; then
+	panic "Failed to mount volatile filesystem"
+fi
+
+chmod 700 "$stateless_mntdir"
+
+# create stateless hierarchy
+mkdir -p "$stateless_mntdir"/real \
+         "$stateless_mntdir"/volatile \
+         "$stateless_mntdir"/.work
+
+log_end_msg
+
+
+log_begin_msg "Preparing stateless root filesystem"
+
+if ! mount --move "$rootmnt" "$stateless_mntdir"/real ; then
+	panic "Failed to move real root filesystem"
+fi
+
+if ! mount -t overlay -o lowerdir="$stateless_mntdir"/real,upperdir="$stateless_mntdir"/volatile,workdir="$stateless_mntdir"/.work stateless-root "$rootmnt" ; then
+	panic "Failed to mount overlay filesystem"
+fi
+
+if ! mkdir -p "${rootmnt}${stateless_mntdir}" ||
+   ! mount --move "${stateless_mntdir}" "${rootmnt}${stateless_mntdir}" ; then
+	panic "Failed to move volatile filesystem into new root"
+fi
+
+log_end_msg
+
+exit 0

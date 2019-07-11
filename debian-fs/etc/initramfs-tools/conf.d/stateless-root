@@ -1,0 +1,19 @@
+# Type of overlay filesystem (tmpfs|ext4|btrfs|xfs).
+# Overriden by stateless.fstype= on kernel command line but only to disable
+# stateless mechanism (if empty) or to use tmpfs.
+STATELESS_FSTYPE=tmpfs
+
+# Default mount options for overlay filesystem.
+# Overriden by stateless.flags= on kernel command line.
+STATELESS_FLAGS=
+
+# Default device to use for overlay filesystem.
+# Overriden by stateless.device= on kernel command line.
+# It can be either a path, PARTLABEL= or PARTUUID=; LABEL= and UUID= are
+# obviously NOT suitable. It is not used if STATELESS_FSTYPE is tmpfs.
+STATELESS_DEVICE=PARTLABEL=volatile-device
+
+# Name of the volatile filesystem.
+# This is used for sanity checking to prevent erasing wrong device. This value
+# shall be suitable for the filesystem type chosen above.
+STATELESS_FSLABEL=".stateless"
