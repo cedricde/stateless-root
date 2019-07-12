@@ -50,7 +50,7 @@ if [ "$STATELESS_FSTYPE" = 'tmpfs' ] ; then
 	volatile_dev=tmpfs
 else
 	# resolve volatile device
-	volatile_dev=$(resolve_device "$STATELESS_DEVICE")
+	volatile_dev=$(resolve_device "$STATELESS_DEVICE" || :)
 	if [ -z "$volatile_dev" ] ; then
 		panic "Bad volatile device specified"
 	fi
