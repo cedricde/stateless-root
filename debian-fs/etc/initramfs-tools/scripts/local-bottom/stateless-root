@@ -37,11 +37,9 @@ for x in $(cat /proc/cmdline) ; do
 done
 
 # sanity check
-case "$STATELESS_FSTYPE" in
-	''|no|none|false|disable)
-		exit 0
-		;;
-esac
+if [ -z "$STATELESS_FSTYPE" ] ; then
+	exit 0
+fi
 
 
 log_begin_msg "Preparing volatile filesystem"
