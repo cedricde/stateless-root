@@ -93,7 +93,7 @@ fi
 chmod 700 "$stateless_mntdir"
 
 # create stateless hierarchy
-mkdir -p "$stateless_mntdir"/real \
+mkdir -p "$stateless_mntdir"/base \
          "$stateless_mntdir"/volatile \
          "$stateless_mntdir"/.work
 
@@ -102,11 +102,11 @@ log_end_msg
 
 log_begin_msg "Preparing stateless root filesystem"
 
-if ! mount --move "$rootmnt" "$stateless_mntdir"/real ; then
-	panic "Failed to move real root filesystem"
+if ! mount --move "$rootmnt" "$stateless_mntdir"/base ; then
+	panic "Failed to move base filesystem"
 fi
 
-if ! mount -t overlay -o lowerdir="$stateless_mntdir"/real,upperdir="$stateless_mntdir"/volatile,workdir="$stateless_mntdir"/.work stateless-root "$rootmnt" ; then
+if ! mount -t overlay -o lowerdir="$stateless_mntdir"/base,upperdir="$stateless_mntdir"/volatile,workdir="$stateless_mntdir"/.work stateless-root "$rootmnt" ; then
 	panic "Failed to mount overlay filesystem"
 fi
 
