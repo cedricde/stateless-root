@@ -1,0 +1,105 @@
+#!/bin/sh
+
+set -e
+
+PREREQ=""
+
+case "$1" in
+	prereqs)
+		echo "$PREREQ"
+		exit 0
+		;;
+esac
+
+. /scripts/functions
+
+# initialize configuration
+STATELESS_DEVICE=
+STATELESS_CHUNKSIZE=256
+devname_base=stateless-base
+devname_newroot=stateless-root
+
+# load default configuration
+. /conf/conf.d/stateless-root
+
+for x in $(cat /proc/cmdline) ; do
+	case "$x" in
+		stateless.device=*)
+			STATELESS_DEVICE=${x#stateless.device=}
+			;;
+		stateless.chunksize=*)
+			STATELESS_CHUNKSIZE=${x#stateless.chunksize=}
+			;;
+	esac
+done
+
+# sanity check
+if [ -z "$STATELESS_DEVICE" ] ; then
+	exit 0
+fi
+
+
+# process special device zram
+case "$STATELESS_DEVICE" in
+	zram=*)
+		log_begin_msg "Creating zram device"
+
+		v=${STATELESS_DEVICE#zram=}
+		size=${v%@*}
+		[ "$v" != "$size" ] && comp=${v#*@} || comp=
+
+		modprobe zram num_devices=1
+		if [ ! -b /dev/zram0 ] ; then
+			panic "Unable to initialize zram"
+		elif [ -n "$comp" ] && ! echo $comp > /sys/block/zram0/comp_algorithm ; then
+			panic "Unable to set compression algorithm to '$comp'"
+		elif ! echo $size > /sys/block/zram0/disksize ; then
+			panic "Unable to set device size to '$size'"
+		else
+			STATELESS_DEVICE=/dev/zram0
+		fi
+
+		log_end_msg
+		;;
+esac
+
+log_begin_msg "Preparing stateless device"
+
+# resolve devices
+real_root=$(resolve_device "$ROOT" || :)
+snapshot_dev=$(resolve_device "$STATELESS_DEVICE" || :)
+
+# sanity checks
+if [ -z "$real_root" ] ; then
+	panic "Unable to resolve root device '$ROOT'"
+elif [ -z "$snapshot_dev" ] ; then
+	panic "Unable to resolve snapshot device '$STATELESS_DEVICE'"
+fi
+case "$(get_fstype "$snapshot_dev" || :)" in
+	''|unknown)
+		;;
+	*)
+		panic "Snapshot device is not empty, use wipefs to clear it"
+		;;
+esac
+
+# retrieve information about devices
+root_ssize=$(blockdev --getsz "$real_root")
+snapshot_ssize=$(blockdev --getsz "$snapshot_dev")
+
+if ! dmsetup create ${devname_base} --table "0 ${root_ssize} snapshot-origin ${real_root}" ; then
+	panic "Unable to create origin device"
+fi
+
+if ! dmsetup create ${devname_newroot} --table "0 ${root_ssize} snapshot ${real_root} ${snapshot_dev} N ${STATELESS_CHUNKSIZE}" ; then
+	panic "Unable to create snapshot"
+fi
+
+# update root device for next scripts
+if [ -e /dev/mapper/${devname_newroot} ] ; then
+	echo "ROOT=/dev/mapper/${devname_newroot}" >> /conf/param.conf
+fi
+
+log_end_msg
+
+exit 0

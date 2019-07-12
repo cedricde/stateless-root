@@ -1,0 +1,21 @@
+#!/bin/sh
+
+set -e
+
+PREREQ=""
+
+case "$1" in
+	prereqs)
+		echo "$PREREQ"
+		exit 0
+		;;
+esac
+
+. /usr/share/initramfs-tools/hook-functions
+
+copy_exec /sbin/dmsetup
+
+manual_add_modules dm_snapshot
+manual_add_modules zram
+
+exit 0
