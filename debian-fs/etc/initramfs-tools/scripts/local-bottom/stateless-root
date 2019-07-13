@@ -37,7 +37,7 @@ for x in $(cat /proc/cmdline) ; do
 done
 
 # sanity check
-if [ -z "$STATELESS_FSTYPE" ] ; then
+if [ -z "$STATELESS_DEVICE" -o -z "$STATELESS_FSTYPE" ] ; then
 	exit 0
 fi
 

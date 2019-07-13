@@ -10,7 +10,7 @@ STATELESS_FLAGS=
 # Default device to use for overlay filesystem.
 # Overriden by stateless.device= on kernel command line.
 # It can be either a path, PARTLABEL= or PARTUUID=; LABEL= and UUID= are
-# obviously NOT suitable. It is not used if STATELESS_FSTYPE is tmpfs.
+# obviously NOT suitable. If empty the stateless mechanism is disabled.
 STATELESS_DEVICE=PARTLABEL=volatile-device
 
 # Name of the volatile filesystem.
