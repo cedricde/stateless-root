@@ -91,8 +91,16 @@ if ! dmsetup create ${devname_base} --table "0 ${root_ssize} snapshot-origin ${r
 	panic "Unable to create origin device"
 fi
 
+if ! dmsetup suspend ${devname_base} ; then
+	panic "Unable to suspend snapshot origin"
+fi
+
 if ! dmsetup create ${devname_newroot} --table "0 ${root_ssize} snapshot ${real_root} ${snapshot_dev} N ${STATELESS_CHUNKSIZE}" ; then
 	panic "Unable to create snapshot"
+fi
+
+if ! dmsetup resume ${devname_base} ; then
+	panic "Unable to resume snapshot origin"
 fi
 
 # update root device for next scripts
