@@ -1,7 +1,7 @@
 # Default device used to store volatile data.
 # Overriden by stateless.device= on kernel command line.
 # It can be either a path, PARTLABEL= or PARTUUID= or the special value
-# zram=SIZE@COMPRESSOR to create ZRAM device with specified size and compressor.
+# zram=SIZE[@COMP] to create ZRAM device with the specified size and compressor.
 STATELESS_DEVICE=PARTLABEL=volatile-device
 
 # Default chunk size (in sectors) for snapshot target.
